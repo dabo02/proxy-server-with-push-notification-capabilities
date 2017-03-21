@@ -332,6 +332,9 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         self.data.insert(1, recordRoute)
         request = string.join(self.data, "\r\n")
         self.socket.sendto(request, reg_addr)
+        showtime()
+        logging.info("<<< %s" % self.data[0])
+        logging.info("---\n<< Registration sent to registrar [%d]:\n%s\n---" % (len(request), request))
 
 
 
@@ -349,8 +352,13 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 if token is not None:
                     caller = self.getOrigin()
                     self.sendPushNotification(token, caller)
+                    showtime()
+                    logging.info("Invite Push Notification sent to pn-token: %s" % token)
                 request = string.join(self.data, '\r\n')
                 self.socket.sendto(request, client_address)
+                showtime()
+                logging.info("<<< %s" % self.data[0])
+                logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
 
             else:
                 data = self.removeRouteHeader()
@@ -358,6 +366,9 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 data.insert(1, recordRoute)
                 request = string.join(data, '\r\n')
                 self.socket.sendto(request, reg_addr)
+                showtime()
+                logging.info(">>> %s" % self.data[0])
+                logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
         else:
             self.sendResponse("500 Server Internal Error")
 
@@ -369,17 +380,24 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 client_address = (client_ip, client_port)
                 request = string.join(self.data, '\r\n')
                 self.socket.sendto(request, client_address)
+                showtime()
+                logging.info("<<< %s" % self.data[0])
+                logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
             else:
                 data = self.removeRouteHeader()
                 #insert Record-Route
                 data.insert(1, recordRoute)
                 request = string.join(data,'\r\n')
                 self.socket.sendto(request, reg_addr)
+                showtime()
+                logging.info(">>> %s" % self.data[0])
+                logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
     def processNonInvite(self):
         origin = self.getOrigin()
         if len(origin) == 0:
             self.sendResponse("400 Bad Request")
+            logging.info()
             return
         destination = self.getDestination()
         if len(destination) > 0:
@@ -388,15 +406,25 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 client_address = (client_ip, client_port)
                 request = string.join(self.data, '\r\n')
                 self.socket.sendto(request, client_address)
+                showtime()
+                logging.info("<<< %s" % self.data[0])
+                logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
             else:
                 data = self.removeRouteHeader()
                 #insert Record-Route
                 data.insert(1, recordRoute)
                 request = string.join(data, '\r\n')
                 self.socket.sendto(request, reg_addr)
+                showtime()
+                logging.info(">>> %s" % self.data[0])
+                logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
         else:
             self.sendResponse("500 Server Internal Error")
+            logging.warn("---------------------------------------------------------")
+            logging.warn("Server Sent Error to client because destination in uri is ambiguous: %s" % destination)
+            logging.warn("---------------------------------------------------------")
+
 
     def processBye(self):
         if self.client_address == reg_addr:
@@ -405,11 +433,17 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             client_address = (client_ip, client_port)
             request = string.join(self.data, '\r\n')
             self.socket.sendto(request, client_address)
+            showtime()
+            logging.info("<<< %s" % self.data[0])
+            logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
         else:
             data = self.removeRouteHeader()
             data.insert(1, recordRoute)
             request = string.join(data, '\r\n')
             self.socket.sendto(request, reg_addr)
+            showtime()
+            logging.info(">>> %s" % self.data[0])
+            logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
     def processCode(self):
         if self.client_address == reg_addr:
@@ -419,20 +453,23 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             client_address = (client_ip, client_port)
             request = string.join(self.data, '\r\n')
             self.socket.sendto(request, client_address)
+            showtime()
+            logging.info("<<< %s" % self.data[0])
+            logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
         else:
             self.data.insert(1, recordRoute)
             request = string.join(self.data, '\r\n')
             self.socket.sendto(request, reg_addr)
-        showtime()
-        logging.info("<<< %s" % self.data[0])
-        logging.info("---\n<< server send [%d]:\n%s\n---" % (len(request), request))
+            showtime()
+            logging.info(">>> %s" % self.data[0])
+            logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
 
     def processRequest(self):
         #print "processRequest"
         if len(self.data) > 0:
             request_uri = self.data[0]
-            print "Received: " + request_uri + " From: " + self.client_address[0] + ":" + str(self.client_address[1])
+            logging.info("Received: " + request_uri + " From: " + self.client_address[0] + ":" + str(self.client_address[1]))
             if rx_register.search(request_uri):
                 self.processRegister()
             elif rx_invite.search(request_uri):
