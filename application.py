@@ -1,10 +1,4 @@
-#    Copyright 2014 Philippe THIRION
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU General Public License as published by
-#    the Free Software Foundation, either version 3 of the License, or
-#    (at your option) any later version.
-
+#! /usr/bin/python
 #    This program is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
 #    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -19,6 +13,7 @@ import string
 import socket
 import threading
 import sys
+import traceback
 import time
 import logging
 from apns import APNs, Frame, Payload
@@ -73,7 +68,7 @@ if development:
     public_ip = "207.204.176.127"
     email = 'fburgos@optivon.net'
     password = 'optivon_787'
-    apns = APNs(use_sandbox=True, cert_file='/home/dabo02/Desktop/Projects/Work/VoipPushProto/MercurioVoipPush.pem')
+    apns = APNs(use_sandbox=True, cert_file='/home/dabo02/Desktop/Projects/Work/proxy-server/MercurioVoipPush.pem')
     config = {'apiKey': "AIzaSyAlTNQ0rX_z49-EL71e8le0vPew16g8WDg",
               'authDomain': "mercurio-development.firebaseapp.com",
               'databaseURL': "https://mercurio-development.firebaseio.com",
@@ -126,7 +121,14 @@ def sendPushNotificationFR():
             token_hex = str(reg.val()['pn-token'])
             if token_hex != 'Empty' and token_hex:
                 payload = Payload(alert='Register', sound='Default', badge=1)
-                apns.gateway_server.send_notification(token_hex, payload)
+                try:
+                    apns.gateway_server.send_notification(token_hex, payload)
+                except Exception as e:
+                    logging.warn("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
+                    logging.error(traceback.format_exc())
+                    server.shutdown()
+                    server.server_close()
+                    sys.exit(1)
     t = threading.Timer(30.0, sendPushNotificationFR)
     t.start()
 
@@ -140,7 +142,14 @@ class UDPHandler(SocketServer.BaseRequestHandler):
 
     def sendPushNotification(self, token, caller):
         payload = Payload(alert=('You have an incoming call from %s' % caller), sound='Default', badge=1)
-        apns.gateway_server.send_notification(token, payload)
+        try:
+            apns.gateway_server.send_notification(token, payload)
+        except Exception as err:
+            logging.warn("Error happened sending request to apns service: %s -------- %s" %(err.__doc__, err.message))
+            logging.error(traceback.format_exc())
+            server.shutdown()
+            server.server_close()
+            sys.exit(1)
 
     def changeRequestUri(self):
         # change request uri
@@ -501,7 +510,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             elif rx_code.search(request_uri):
                 self.processCode()
             else:
-                logging.error("request_uri %s" % request_uri)
+                logging.warn("request_uri %s" % request_uri)
                 #print "message %s unknown" % self.data
 
     def handle(self):
@@ -520,7 +529,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 logging.warning("---")
 
 if __name__ == "__main__":
-    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', filename='proxy.log', level=logging.INFO, datefmt='%H:%M:%S')
+    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', filename='/var/log/Mercurio_Proxy.log', level=logging.INFO, datefmt='%H:%M:%S')
     logging.info(time.strftime("%a, %d %b %Y %H:%M:%S ", time.localtime()))
     hostname = socket.gethostname()
     ip_address = socket.gethostbyname(hostname)
@@ -529,5 +538,9 @@ if __name__ == "__main__":
     server = SocketServer.UDPServer((HOST, PORT), UDPHandler)
     print "Server is running on public ip -> " + public_ip + ":" + str(PORT)
     print "Server is running on private ip -> " + ip_address + ":" + str(PORT)
-    timer.start()
-    server.serve_forever()
+    try:
+        timer.start()
+        server.serve_forever()
+    except Exception as e:
+        logging.error("system exit with error see logs for details")
+        sys.exit(1)
