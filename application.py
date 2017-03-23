@@ -64,32 +64,43 @@ rx_expires = re.compile("^Expires: (.*)$")
 
 # global dictionary
 development = True
-if development:
+dev_box = 'local'
+if dev_box == 'local':
     public_ip = "66.50.161.215"
     email = 'fburgos@optivon.net'
     password = 'optivon_787'
     apns = APNs(use_sandbox=True, cert_file='/home/dabo02/Desktop/Projects/Work/proxy-server/MercurioVoipPush.pem')
-    config = {'apiKey': "AIzaSyAlTNQ0rX_z49-EL71e8le0vPew16g8WDg",
-              'authDomain': "mercurio-development.firebaseapp.com",
-              'databaseURL': "https://mercurio-development.firebaseio.com",
-              'storageBucket': "mercurio-development.appspot.com",
-              'messagingSenderId': "203647142462"}
 
+    if development:
+        config = {'apiKey': "AIzaSyAlTNQ0rX_z49-EL71e8le0vPew16g8WDg",
+                  'authDomain': "mercurio-development.firebaseapp.com",
+                  'databaseURL': "https://mercurio-development.firebaseio.com",
+                  'storageBucket': "mercurio-development.appspot.com",
+                  'messagingSenderId': "203647142462"}
+
+    else:
+        config = {'apiKey': "AIzaSyBYty0ff3hxlmwmBjy7paWCEalIrJxDpZ8",
+                  'authDomain': "mercurio-39a44.firebaseapp.com",
+                  'databaseURL': "https://mercurio-39a44.firebaseio.com",
+                  'storageBucket': "mercurio-39a44.appspot.com"}
 else:
-    public_ip = '54.165.3.139'
+    public_ip = "34.207.215.177"
     email = 'fburgos@optivon.net'
     password = 'optivon_787'
     apns = APNs(use_sandbox=True, cert_file='/home/admin/VoipPush/MercurioVoipPush.pem')
-    # config = {'apiKey': "AIzaSyBYty0ff3hxlmwmBjy7paWCEalIrJxDpZ8",
-    #     'authDomain': "mercurio-39a44.firebaseapp.com",
-    #     'databaseURL': "https://mercurio-39a44.firebaseio.com",
-    #     'storageBucket': "mercurio-39a44.appspot.com"
-    #     }
-    config = {'apiKey': "AIzaSyAlTNQ0rX_z49-EL71e8le0vPew16g8WDg",
-              'authDomain': "mercurio-development.firebaseapp.com",
-              'databaseURL': "https://mercurio-development.firebaseio.com",
-              'storageBucket': "mercurio-development.appspot.com",
-              'messagingSenderId': "203647142462"}
+
+    if not development:
+        config = {'apiKey': "AIzaSyBYty0ff3hxlmwmBjy7paWCEalIrJxDpZ8",
+                    'authDomain': "mercurio-39a44.firebaseapp.com",
+                    'databaseURL': "https://mercurio-39a44.firebaseio.com",
+                    'storageBucket': "mercurio-39a44.appspot.com"}
+    else:
+        config = {'apiKey': "AIzaSyAlTNQ0rX_z49-EL71e8le0vPew16g8WDg",
+                  'authDomain': "mercurio-development.firebaseapp.com",
+                  'databaseURL': "https://mercurio-development.firebaseio.com",
+                  'storageBucket': "mercurio-development.appspot.com",
+                  'messagingSenderId': "203647142462"}
+
 
 reg_addr = ('63.131.240.90', 5060)
 recordRoute = ""
@@ -533,6 +544,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         request_uri = self.data[0]
         if rx_request_uri.search(request_uri) or rx_code.search(request_uri):
             showtime()
+            self.securityCheck()
             self.processRequest()
         else:
             if len(data) > 4:
