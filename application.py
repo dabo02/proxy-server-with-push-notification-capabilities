@@ -1,4 +1,3 @@
-#! /usr/bin/python
 #    This program is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
 #    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -53,6 +52,7 @@ rx_code = re.compile("^SIP/2.0 ([^ ]*)")
 rx_request_uri = re.compile("^([^ ]*) sip:([^ ]*) SIP/2.0")
 rx_route = re.compile("^Route:")
 rx_contentLength = re.compile("^Content-Length:")
+rx_user_agent = re.compile("User\-Agent:([^@]*)")
 rx_token = re.compile("pn\-token=([^@]*)")
 rx_cContentLength = re.compile("^l:")
 rx_via = re.compile("^Via:")
@@ -63,9 +63,9 @@ rx_contact_expires = re.compile("expires=([^;$]*)")
 rx_expires = re.compile("^Expires: (.*)$")
 
 # global dictionary
-development = False
+development = True
 if development:
-    public_ip = "207.204.176.127"
+    public_ip = "66.50.161.215"
     email = 'fburgos@optivon.net'
     password = 'optivon_787'
     apns = APNs(use_sandbox=True, cert_file='/home/dabo02/Desktop/Projects/Work/proxy-server/MercurioVoipPush.pem')
@@ -96,6 +96,11 @@ recordRoute = ""
 topVia = ""
 registrar = {}
 push_notification = {}
+blacklisted_user_agents = ['sipcli', 'sipvicious', 'sip-scan', 'sipsak', 'sundayddr',
+                           'friendly-scanner', 'iWar', 'CSipSimple', 'SIVuS', 'Gulp',
+                           'sipv', 'smap', 'friendly-request', 'VaxIPUserAgent', 'VaxSIPUserAgent',
+                           'siparmyknife', 'Test Agent']
+
 
 firebase = pyrebase.initialize_app(config)
 auth = firebase.auth()
@@ -200,6 +205,14 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             else:
                 data.append(line)
         return data
+
+    def securityCheck(self):
+        for line in self.data:
+            if rx_user_agent.search(line):
+                ua = rx_user_agent.search(line).group(1)
+                if ua in blacklisted_user_agents:
+                    self.sendResponse("495 Further Requests Will Be Tracerouted")
+                    logging.warn("Malicious user agent %s found server response sent" % ua)
 
     def checkValidity(self, uri):
         registress = db.child('voip-registrar').get()
@@ -536,8 +549,8 @@ if __name__ == "__main__":
     recordRoute = "Record-Route: <sip:%s:%d;lr>" % (public_ip, PORT)
     topVia = "Via: SIP/2.0/UDP %s:%d" % (public_ip, PORT)
     server = SocketServer.UDPServer((HOST, PORT), UDPHandler)
-    print "Server is running on public ip -> " + public_ip + ":" + str(PORT)
-    print "Server is running on private ip -> " + ip_address + ":" + str(PORT)
+    logging.info("Server is running on public ip -> " + public_ip + ":" + str(PORT))
+    logging.info("Server is running on private ip -> " + ip_address + ":" + str(PORT))
     try:
         timer.start()
         server.serve_forever()

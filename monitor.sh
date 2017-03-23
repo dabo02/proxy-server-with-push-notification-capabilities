@@ -1,15 +1,15 @@
-#! /bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin:/usr/bin/python
+#!/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+case "$(pgrep -f application.py | wc -w)" in
 
-case "$(sudo ps ax | grep -v grep | grep application.py | awk '{print $1}' | wc -c)" in
+0) echo "Server Fault detected restarting..." >> /var/log/proxy-monitor.txt
+   python /home/dabo02/Desktop/Projects/Work/proxy-server/application.py;;
 
-0) sudo echo "Server Fault detected restarting..." >> /var/log/proxy-monitor.txt
-   sudo python /home/dabo02/Desktop/Projects/Work/proxy-server/application.py & ;;
+1) #echo "Nothing to be done everything working as expected" >> /var/log/proxy-monitor.txt;;
 
-1) sudo echo "Nothing to be done everything working as expected"
-	;;
+ ;;
+*)  echo "there are multiple instances running killing processes and restarting server..." >> /var/log/proxy-monitor.txt
+    kill -9 $(pgrep -f application.py)
+	python /home/dabo02/Desktop/Projects/Work/proxy-server/application.py;;
 
-*)  sudo echo "there are multiple instances running killing processes and restarting server..." >> /var/log/proxy-monitor.txt
-    sudo kill -9 $(ps ax | grep -v grep | grep application.py | awk '{print $1}')
-	sudo python /home/dabo02/Desktop/Projects/Work/proxy-server/application.py & ;;
 esac
