@@ -18,7 +18,7 @@ import logging
 from apns import APNs, Frame, Payload
 import pyrebase
 
-HOST, PORT = '0.0.0.0', 5060
+HOST, PORT = '0.0.0.0', 7654
 rx_register = re.compile("^REGISTER")
 rx_invite = re.compile("^INVITE")
 rx_ack = re.compile("^ACK")
@@ -64,13 +64,12 @@ rx_expires = re.compile("^Expires: (.*)$")
 
 # global dictionary
 development = True
-dev_box = 'local'
+dev_box = 'remote'
 if dev_box == 'local':
-    public_ip = "66.50.161.215"
+    public_ip = "65.23.216.35"
     email = 'fburgos@optivon.net'
     password = 'optivon_787'
     apns = APNs(use_sandbox=True, cert_file='/home/dabo02/Desktop/Projects/Work/proxy-server/MercurioVoipPush.pem')
-
     if development:
         config = {'apiKey': "AIzaSyAlTNQ0rX_z49-EL71e8le0vPew16g8WDg",
                   'authDomain': "mercurio-development.firebaseapp.com",
@@ -87,8 +86,7 @@ else:
     public_ip = "34.207.215.177"
     email = 'fburgos@optivon.net'
     password = 'optivon_787'
-    apns = APNs(use_sandbox=True, cert_file='/home/admin/VoipPush/MercurioVoipPush.pem')
-
+    apns = APNs(use_sandbox=True, cert_file='/usr/local/proxy-server/MercurioVoipPush.pem')
     if not development:
         config = {'apiKey': "AIzaSyBYty0ff3hxlmwmBjy7paWCEalIrJxDpZ8",
                     'authDomain': "mercurio-39a44.firebaseapp.com",
@@ -224,6 +222,13 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 if ua in blacklisted_user_agents:
                     self.sendResponse("495 Further Requests Will Be Tracerouted")
                     logging.warn("Malicious user agent %s found server response sent" % ua)
+                    return False
+                else:
+                    return True
+        if self.client_address == reg_addr:
+            return True
+        else:
+            return False
 
     def checkValidity(self, uri):
         registress = db.child('voip-registrar').get()
@@ -319,6 +324,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                         token = rx_token.search(line).group(1)
                     else:
                         self.sendResponse("407 Proxy Authentication Required")
+                        logging.warn("Someone tried registering without push notification token from %s:%s" % (self.client_address[0], self.client_address[1]))
                         return
                 else:
                     md = rx_addr.search(line)
@@ -347,6 +353,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 if reg.val()['contact'] == fromm and reg.val()['client_ip'] == self.client_address[0] and reg.val()['client_port'] == self.client_address[1]:
                     already_registered = True
                     con = reg.key()
+                    break
                 else:
                     already_registered = False
         else:
@@ -544,8 +551,10 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         request_uri = self.data[0]
         if rx_request_uri.search(request_uri) or rx_code.search(request_uri):
             showtime()
-            self.securityCheck()
-            self.processRequest()
+            if self.securityCheck():
+                self.processRequest()
+            else:
+                logging.warning("server security check not passed from client: %s:%s" % (self.client_address[0], str(self.client_address[1])))
         else:
             if len(data) > 4:
                 showtime()
