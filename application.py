@@ -1,12 +1,24 @@
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
+'''SIP Server with iOS Push Notification Capabilities
+Copyright (C) 2017 Francisco Burgos Collazo  
 
-#    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-import SocketServer
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+" Code On!! (Rock On!! in modern times) and please, share and enjoy... 
+Code yourself out life is short..." Me :)
+'''
+
+import socketserver
 import re
 import string
 import socket
@@ -16,9 +28,11 @@ import traceback
 import time
 import logging
 from apns import APNs, Frame, Payload
-import pyrebase
+import sqlite3
+import os
+from sip_user import SipUser
 
-HOST, PORT = '0.0.0.0', 7654
+HOST, PORT = (os.environ.get('SIP_SERVER_HOST') or '0.0.0.0'), (os.environ.get('SIP_SERVER_PORT') or 7654)
 rx_register = re.compile("^REGISTER")
 rx_invite = re.compile("^INVITE")
 rx_ack = re.compile("^ACK")
@@ -64,43 +78,9 @@ rx_expires = re.compile("^Expires: (.*)$")
 
 # global dictionary
 development = True
-dev_box = 'remote'
-if dev_box == 'local':
-    public_ip = "65.23.216.35"
-    email = 'fburgos@optivon.net'
-    password = 'optivon_787'
-    apns = APNs(use_sandbox=True, cert_file='/home/dabo02/Desktop/Projects/Work/proxy-server/MercurioVoipPush.pem')
-    if development:
-        config = {'apiKey': "AIzaSyAlTNQ0rX_z49-EL71e8le0vPew16g8WDg",
-                  'authDomain': "mercurio-development.firebaseapp.com",
-                  'databaseURL': "https://mercurio-development.firebaseio.com",
-                  'storageBucket': "mercurio-development.appspot.com",
-                  'messagingSenderId': "203647142462"}
-
-    else:
-        config = {'apiKey': "AIzaSyBYty0ff3hxlmwmBjy7paWCEalIrJxDpZ8",
-                  'authDomain': "mercurio-39a44.firebaseapp.com",
-                  'databaseURL': "https://mercurio-39a44.firebaseio.com",
-                  'storageBucket': "mercurio-39a44.appspot.com"}
-else:
-    public_ip = "34.207.215.177"
-    email = 'fburgos@optivon.net'
-    password = 'optivon_787'
-    apns = APNs(use_sandbox=True, cert_file='/usr/local/proxy-server/MercurioVoipPush.pem')
-    if not development:
-        config = {'apiKey': "AIzaSyBYty0ff3hxlmwmBjy7paWCEalIrJxDpZ8",
-                    'authDomain': "mercurio-39a44.firebaseapp.com",
-                    'databaseURL': "https://mercurio-39a44.firebaseio.com",
-                    'storageBucket': "mercurio-39a44.appspot.com"}
-    else:
-        config = {'apiKey': "AIzaSyAlTNQ0rX_z49-EL71e8le0vPew16g8WDg",
-                  'authDomain': "mercurio-development.firebaseapp.com",
-                  'databaseURL': "https://mercurio-development.firebaseio.com",
-                  'storageBucket': "mercurio-development.appspot.com",
-                  'messagingSenderId': "203647142462"}
-
-
-reg_addr = ('63.131.240.90', 5060)
+public_ip = os.environ.get('SIP_SERVER_PUBLIC_IP')
+apns = APNs(use_sandbox=True, cert_file=os.environ.get('PATH_TO_PN_CERT'))
+reg_addr = (os.environ.get('SIP_REGISTRAR_IP') or None, os.environ.get('SIP_REGISTRAR_PORT') or None)
 recordRoute = ""
 topVia = ""
 registrar = {}
@@ -110,11 +90,6 @@ blacklisted_user_agents = ['sipcli', 'sipvicious', 'sip-scan', 'sipsak', 'sunday
                            'sipv', 'smap', 'friendly-request', 'VaxIPUserAgent', 'VaxSIPUserAgent',
                            'siparmyknife', 'Test Agent']
 
-
-firebase = pyrebase.initialize_app(config)
-auth = firebase.auth()
-user = auth.sign_in_with_email_and_password(email, password)
-db = firebase.database()
 def hexdump(chars, sep, width):
     while chars:
         line = chars[:width]
@@ -138,7 +113,7 @@ def sendPushNotificationFR():
                 try:
                     apns.gateway_server.send_notification(token_hex, payload)
                 except Exception as e:
-                    logging.warn("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
+                    logging.warning("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
                     logging.error(traceback.format_exc())
                     server.shutdown()
                     server.server_close()
@@ -148,34 +123,42 @@ def sendPushNotificationFR():
 
 timer = threading.Timer(30.0, sendPushNotificationFR)
 
-class UDPHandler(SocketServer.BaseRequestHandler):
+class UDPHandler(socketserver.BaseRequestHandler):
 
-    def debugRegister(self):
-        regs = db.child('voip-registrar').get()
+    def handle(self):
+        data = self.request[0]
+        self.data = data.split('\r\n')
+        self.socket = self.request[1]
+        request_uri = self.data[0]
+        self.sip_user = SipUser()
+        self.db_connection = sqlite3.connect('sip_registrar.db')
+        self.db_cursor = self.db_connection.cursor()
 
+        if rx_request_uri.search(request_uri) or rx_code.search(request_uri):
+            showtime()
+            if self.security_check():
+                self.process_request()
+            else:
+                logging.warning("server security check not passed from client: %s:%s" % (self.client_address[0], str(self.client_address[1])))
+        else:
+            if len(data) > 4:
+                showtime()
+                logging.warning("---\n>> server received [%d]:" % len(data))
+                hexdump(data, ' ', 16)
+                logging.warning("---")
 
-    def sendPushNotification(self, token, caller):
+    def send_push_notification(self, token, caller):
         payload = Payload(alert=('You have an incoming call from %s' % caller), sound='Default', badge=1)
         try:
             apns.gateway_server.send_notification(token, payload)
         except Exception as err:
-            logging.warn("Error happened sending request to apns service: %s -------- %s" %(err.__doc__, err.message))
+            logging.warning("Error happened sending request to apns service: %s -------- %s" %(err.__doc__, err.message))
             logging.error(traceback.format_exc())
             server.shutdown()
             server.server_close()
             sys.exit(1)
 
-    def changeRequestUri(self):
-        # change request uri
-        md = rx_request_uri.search(self.data[0])
-        if md:
-            method = md.group(1)
-            uri = md.group(2)
-            if registrar.has_key(uri):
-                uri = "sip:%s" % registrar[uri][0]
-                self.data[0] = "%s %s SIP/2.0" % (method, uri)
-
-    def removeRouteHeader(self):
+    def remove_route_header(self):
         # delete Route
         data = []
         for line in self.data:
@@ -183,7 +166,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 data.append(line)
         return data
 
-    def addTopVia(self):
+    def add_top_via(self):
         branch= ""
         data = []
         for line in self.data:
@@ -205,7 +188,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 data.append(line)
         return data
 
-    def removeTopVia(self):
+    def remove_top_via(self):
         data = []
         for line in self.data:
             if rx_via.search(line) or rx_cVia.search(line):
@@ -215,13 +198,13 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 data.append(line)
         return data
 
-    def securityCheck(self):
+    def security_check(self):
         for line in self.data:
             if rx_user_agent.search(line):
                 ua = rx_user_agent.search(line).group(1)
                 if ua in blacklisted_user_agents:
-                    self.sendResponse("495 Further Requests Will Be Tracerouted")
-                    logging.warn("Malicious user agent %s found server response sent" % ua)
+                    self.send_response("495 Further Requests Will Be Tracerouted")
+                    logging.warning("Malicious user agent %s found server response sent" % ua)
                     return False
                 else:
                     return True
@@ -230,27 +213,22 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         else:
             return False
 
-    def checkValidity(self, uri):
-        registress = db.child('voip-registrar').get()
-        for reg in registress.each():
-            if reg.val()['contact'] == uri:
-                contact = reg
-        now = int(time.time())
-        if contact.val()['validity'] > now:
-            return True
-        else:
-            db.child(contact.key()).remove()
-            logging.info("registration for %s has expired" % uri)
-            return False
+    def check_validity(self, uri):
+        contact = self.db_cursor.execute("SELECT * FROM registrar WHERE name=?", uri).fetchone()
+        if contact:
+            now = int(time.time())
+            if contact[4] > now:
+                return True
+            else:
+                self.db_cursor.execute("DELETE FROM registrar WHERE uri=?", uri)
+                logging.info("registration for %s has expired" % uri)
+                return False
 
-    def getSocketInfo(self, uri):
-        all_registrees = db.child('voip-registrar').get()
-        if all_registrees.val():
-            for reg in all_registrees.each():
-                if reg.val()['contact'] == uri:
-                        return (reg.val()['client_ip'], reg.val()['client_port'], reg.val()['pn-token'])
+    def get_socket_info(self, uri):
+        user = self.db_cursor.execute("SELECT * FROM register WHERE uri=?", uri)
+        return user[1], user[2], user[3] 
 
-    def getDestination(self):
+    def get_destination(self):
         destination = ""
         for line in self.data:
             if rx_to.search(line) or rx_cto.search(line):
@@ -260,7 +238,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 break
         return destination
 
-    def getOrigin(self):
+    def get_origin(self):
         origin = ""
         for line in self.data:
             if rx_from.search(line) or rx_cfrom.search(line):
@@ -270,7 +248,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 break
         return origin
 
-    def sendResponse(self, code):
+    def send_response(self, code):
         request_uri = "SIP/2.0 " + code
         self.data[0]= request_uri
         index = 0
@@ -299,7 +277,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
         text = string.join(data, '\r\n')
         self.socket.sendto(text, self.client_address)
 
-    def processRegister(self):
+    def process_register(self):
         fromm = ""
         contact = ""
         contact_expires = ""
@@ -323,8 +301,8 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                     if rx_token.search(line):
                         token = rx_token.search(line).group(1)
                     else:
-                        self.sendResponse("407 Proxy Authentication Required")
-                        logging.warn("Someone tried registering without push notification token from %s:%s" % (self.client_address[0], self.client_address[1]))
+                        token = "No"
+                        logging.warning("Someone tried registering without push notification token from %s:%s" % (self.client_address[0], self.client_address[1]))
                         return
                 else:
                     md = rx_addr.search(line)
@@ -336,87 +314,71 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             md = rx_expires.search(line)
             if md:
                 header_expires = md.group(1)
-
-        # if rx_invalid.search(contact) or rx_invalid2.search(contact):
-        # 	if registrar.has_key(fromm):
-        # 		del registrar[fromm]
-        # 	self.sendResponse("488 Not Acceptable Here")
-        # 	return
         if len(contact_expires) > 0:
             expires = int(contact_expires)
         elif len(header_expires) > 0:
             expires = int(header_expires)
+        already_registered = False
+        data = (fromm, self.client_address[0], self.client_address[1], token, validity)
+        self.sip_user.set_user_info(data)
 
-        all_registrees = db.child('voip-registrar').get()
-        if all_registrees.val():
-            for reg in all_registrees.each():
-                if reg.val()['contact'] == fromm and reg.val()['client_ip'] == self.client_address[0] and reg.val()['client_port'] == self.client_address[1]:
-                    already_registered = True
-                    con = reg.key()
-                    break
-                else:
-                    already_registered = False
-        else:
-            already_registered = False
-        # if already_registered:
-        #     self.checkValidity(fromm)
+        if not self.db_cursor.execute('''SELECT name FROM sqlite_master WHERE type='table' AND name="registrar"'''):
+            self.db_cursor.execute('''CREATE TABLE registrar (uri text, host text, port integer, token text, validity date)''').execute('''CREATE TABLE registrar (uri text, host text, port integer, token text, validity date)''')
+        for contact in self.db_cursor.execute('''SELECT * FROM registrar''').fetchall():
+            if self.sip_user.user_uri in contact:
+                already_registered = True
+                break
 
-        if (not already_registered and expires > 0) or not already_registered:
-            now = int(time.time())
-            validity = now + expires
-            data = {'contact': fromm, 'client_ip': self.client_address[0], 'client_port': self.client_address[1], 'validity': validity, 'pn-token': token}
-            db.child('voip-registrar').push(data)
+        if not already_registered and expires > 0:
+            self.db_cursor.execute("INSERT INTO registrar VALUES (?, ?, ?, ?, ?)", self.sip_user.get_user_info)
         elif already_registered and expires == 0:
-            db.child('voip-registrar').child(con).remove()
+            self.db_cursor.execute("DELETE FROM registrar WHERE uri=?", self.sip_user.user_uri)
+            self.send_response("200 OK")
+        else:
+            valid = self.check_validity(self.sip_user.user_uri)
+            if not valid:
+                self.send_response('401 Unauthorized')
 
-        self.data.insert(1, recordRoute)
         request = string.join(self.data, "\r\n")
-        self.socket.sendto(request, reg_addr)
         showtime()
         logging.info("<<< %s" % self.data[0])
-        logging.info("---\n<< Registration sent to registrar [%d]:\n%s\n---" % (len(request), request))
+        logging.info("---\n<< USER REGISTERED [%d]:\n%s\n---" % (len(request), request))
+        self.send_response("200 OK")
 
-
-
-
-    def processInvite(self):
-        origin = self.getOrigin()
-        if len(origin) == 0:
-            self.sendResponse("400 Bad Request")
+    def process_invite(self):
+        origin = self.get_origin()
+        destination = self.get_destination()
+        if len(origin) == 0 or len(destination) == 0:
+            self.send_response("400 Bad Request")
             return
-        destination = self.getDestination()
-        if len(destination) > 0:
-            if self.client_address == reg_addr:
-                client_ip, client_port, token = self.getSocketInfo(destination)
-                client_address = (client_ip, client_port)
-                if token is not None:
-                    caller = self.getOrigin()
-                    self.sendPushNotification(token, caller)
-                    showtime()
-                    logging.info("Invite Push Notification sent to pn-token: %s" % token)
-                request = string.join(self.data, '\r\n')
-                self.socket.sendto(request, client_address)
+        if destination in self.db_cursor.execute("SELECT * FROM register WHERE uri=?", destination):
+            client_ip, client_port, token = self.get_socket_info(destination)
+            client_address = (client_ip, client_port)
+            if token is not None:
+                self.send_push_notification(token, origin)
                 showtime()
-                logging.info("<<< %s" % self.data[0])
-                logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
+                logging.info("Invite Push Notification sent to pn-token: %s" % token)
+            request = string.join(self.data, '\r\n')
+            self.socket.sendto(request, client_address)
+            showtime()
+            logging.info("<<< %s" % self.data[0])
+            logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
 
-            else:
-                data = self.removeRouteHeader()
-                #insert Record-Route
-                data.insert(1, recordRoute)
-                request = string.join(data, '\r\n')
-                self.socket.sendto(request, reg_addr)
-                showtime()
-                logging.info(">>> %s" % self.data[0])
-                logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
         else:
-            self.sendResponse("500 Server Internal Error")
+            data = self.remove_route_header()
+            #insert Record-Route
+            data.insert(1, recordRoute)
+            request = string.join(data, '\r\n')
+            self.socket.sendto(request, reg_addr)
+            showtime()
+            logging.info(">>> %s" % self.data[0])
+            logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
-    def processAck(self):
-        destination = self.getDestination()
+    def process_ack(self):
+        destination = self.get_destination()
         if len(destination) > 0:
             if self.client_address == reg_addr:
-                client_ip, client_port, token = self.getSocketInfo(destination)
+                client_ip, client_port, token = self.get_socket_info(destination)
                 client_address = (client_ip, client_port)
                 request = string.join(self.data, '\r\n')
                 self.socket.sendto(request, client_address)
@@ -424,7 +386,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 logging.info("<<< %s" % self.data[0])
                 logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
             else:
-                data = self.removeRouteHeader()
+                data = self.remove_route_header()
                 #insert Record-Route
                 data.insert(1, recordRoute)
                 request = string.join(data,'\r\n')
@@ -433,16 +395,16 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 logging.info(">>> %s" % self.data[0])
                 logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
-    def processNonInvite(self):
-        origin = self.getOrigin()
+    def process_non_invite(self):
+        origin = self.get_origin()
         if len(origin) == 0:
-            self.sendResponse("400 Bad Request")
+            self.send_response("400 Bad Request")
             logging.info()
             return
-        destination = self.getDestination()
+        destination = self.get_destination()
         if len(destination) > 0:
             if self.client_address == reg_addr:
-                client_ip, client_port, token = self.getSocketInfo(destination)
+                client_ip, client_port, token = self.get_socket_info(destination)
                 client_address = (client_ip, client_port)
                 request = string.join(self.data, '\r\n')
                 self.socket.sendto(request, client_address)
@@ -450,7 +412,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 logging.info("<<< %s" % self.data[0])
                 logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
             else:
-                data = self.removeRouteHeader()
+                data = self.remove_route_header()
                 #insert Record-Route
                 data.insert(1, recordRoute)
                 request = string.join(data, '\r\n')
@@ -460,16 +422,15 @@ class UDPHandler(SocketServer.BaseRequestHandler):
                 logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
         else:
-            self.sendResponse("500 Server Internal Error")
-            logging.warn("---------------------------------------------------------")
-            logging.warn("Server Sent Error to client because destination in uri is ambiguous: %s" % destination)
-            logging.warn("---------------------------------------------------------")
+            self.send_response("500 Server Internal Error")
+            logging.warning("---------------------------------------------------------")
+            logging.warning("Server Sent Error to client because destination in uri is ambiguous: %s" % destination)
+            logging.warning("---------------------------------------------------------")
 
-
-    def processBye(self):
+    def process_bye(self):
         if self.client_address == reg_addr:
-            destination = self.getDestination()
-            client_ip, client_port, token = self.getSocketInfo(destination)
+            destination = self.get_destination()
+            client_ip, client_port, token = self.get_socket_info(destination)
             client_address = (client_ip, client_port)
             request = string.join(self.data, '\r\n')
             self.socket.sendto(request, client_address)
@@ -477,7 +438,7 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             logging.info("<<< %s" % self.data[0])
             logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
         else:
-            data = self.removeRouteHeader()
+            data = self.remove_route_header()
             data.insert(1, recordRoute)
             request = string.join(data, '\r\n')
             self.socket.sendto(request, reg_addr)
@@ -485,11 +446,11 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             logging.info(">>> %s" % self.data[0])
             logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
-    def processCode(self):
+    def process_code(self):
         if self.client_address == reg_addr:
-            destination = self.getOrigin()
+            destination = self.get_origin()
             self.data.insert(1, recordRoute)
-            client_ip, client_port, token = self.getSocketInfo(destination)
+            client_ip, client_port, token = self.get_socket_info(destination)
             client_address = (client_ip, client_port)
             request = string.join(self.data, '\r\n')
             self.socket.sendto(request, client_address)
@@ -504,63 +465,43 @@ class UDPHandler(SocketServer.BaseRequestHandler):
             logging.info(">>> %s" % self.data[0])
             logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
 
-
-    def processRequest(self):
-        #print "processRequest"
+    def process_request(self):
         if len(self.data) > 0:
             request_uri = self.data[0]
             logging.info("Received: " + request_uri + " From: " + self.client_address[0] + ":" + str(self.client_address[1]))
             if rx_register.search(request_uri):
-                self.processRegister()
+                self.process_register()
             elif rx_invite.search(request_uri):
-                self.processInvite()
+                self.process_invite()
             elif rx_ack.search(request_uri):
-                self.processAck()
+                self.process_ack()
             elif rx_bye.search(request_uri):
-                self.processBye()
+                self.process_bye()
             elif rx_cancel.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_options.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_info.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_message.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_refer.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_prack.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_update.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_subscribe.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_publish.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_notify.search(request_uri):
-                self.processNonInvite()
+                self.process_non_invite()
             elif rx_code.search(request_uri):
-                self.processCode()
+                self.process_code()
             else:
-                logging.warn("request_uri %s" % request_uri)
-                #print "message %s unknown" % self.data
+                logging.warning("request_uri %s" % request_uri)
 
-    def handle(self):
-        data = self.request[0]
-        self.data = data.split('\r\n')
-        self.socket = self.request[1]
-        request_uri = self.data[0]
-        if rx_request_uri.search(request_uri) or rx_code.search(request_uri):
-            showtime()
-            if self.securityCheck():
-                self.processRequest()
-            else:
-                logging.warning("server security check not passed from client: %s:%s" % (self.client_address[0], str(self.client_address[1])))
-        else:
-            if len(data) > 4:
-                showtime()
-                logging.warning("---\n>> server received [%d]:" % len(data))
-                hexdump(data, ' ', 16)
-                logging.warning("---")
 
 if __name__ == "__main__":
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', filename='/var/log/Mercurio_Proxy.log', level=logging.INFO, datefmt='%H:%M:%S')
@@ -569,7 +510,7 @@ if __name__ == "__main__":
     ip_address = socket.gethostbyname(hostname)
     recordRoute = "Record-Route: <sip:%s:%d;lr>" % (public_ip, PORT)
     topVia = "Via: SIP/2.0/UDP %s:%d" % (public_ip, PORT)
-    server = SocketServer.UDPServer((HOST, PORT), UDPHandler)
+    server = socketserver.UDPServer((HOST, PORT), UDPHandler)
     logging.info("Server is running on public ip -> " + public_ip + ":" + str(PORT))
     logging.info("Server is running on private ip -> " + ip_address + ":" + str(PORT))
     try:
