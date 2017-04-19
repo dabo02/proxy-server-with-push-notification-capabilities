@@ -80,7 +80,7 @@ rx_expires = re.compile("^Expires: (.*)$")
 development = True
 public_ip = os.environ.get('SIP_SERVER_PUBLIC_IP')
 apns = APNs(use_sandbox=True, cert_file=os.environ.get('PATH_TO_PN_CERT'))
-reg_addr = (os.environ.get('SIP_REGISTRAR_IP') or None, os.environ.get('SIP_REGISTRAR_PORT') or None)
+#reg_addr = (os.environ.get('SIP_REGISTRAR_IP') or None, os.environ.get('SIP_REGISTRAR_PORT') or None)
 recordRoute = ""
 topVia = ""
 registrar = {}
