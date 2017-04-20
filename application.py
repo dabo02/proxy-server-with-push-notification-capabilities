@@ -20,17 +20,18 @@ Code yourself out life is short..." Me :)
 
 import socketserver
 import re
-import string
 import socket
 import threading
 import sys
 import traceback
 import time
 import logging
-from apns import APNs, Frame, Payload
+# from apns import APNs, Frame, Payload
 import sqlite3
 import os
 from sip_user import SipUser
+import ipgetter
+
 
 HOST, PORT = (os.environ.get('SIP_SERVER_HOST') or '0.0.0.0'), (os.environ.get('SIP_SERVER_PORT') or 7654)
 rx_register = re.compile("^REGISTER")
@@ -66,8 +67,8 @@ rx_code = re.compile("^SIP/2.0 ([^ ]*)")
 rx_request_uri = re.compile("^([^ ]*) sip:([^ ]*) SIP/2.0")
 rx_route = re.compile("^Route:")
 rx_contentLength = re.compile("^Content-Length:")
-rx_user_agent = re.compile("User\-Agent:([^@]*)")
-rx_token = re.compile("pn\-token=([^@]*)")
+rx_user_agent = re.compile("User-Agent:([^@]*)")
+rx_token = re.compile("pn-token=([^@]*)")
 rx_cContentLength = re.compile("^l:")
 rx_via = re.compile("^Via:")
 rx_cVia = re.compile("^v:")
@@ -78,8 +79,8 @@ rx_expires = re.compile("^Expires: (.*)$")
 
 # global dictionary
 development = True
-public_ip = os.environ.get('SIP_SERVER_PUBLIC_IP')
-apns = APNs(use_sandbox=True, cert_file=os.environ.get('PATH_TO_PN_CERT'))
+public_ip = ipgetter.myip()
+# apns = APNs(use_sandbox=True, cert_file=os.environ.get('PATH_TO_PN_CERT'))
 #reg_addr = (os.environ.get('SIP_REGISTRAR_IP') or None, os.environ.get('SIP_REGISTRAR_PORT') or None)
 recordRoute = ""
 topVia = ""
@@ -103,30 +104,30 @@ def quotechars(chars):
 def showtime():
     logging.info(time.strftime("(%H:%M:%S)", time.localtime()))
 
-def sendPushNotificationFR():
-    registrees = db.child('voip-registrar').get()
-    if registrees.val():
-        for reg in registrees.each():
-            token_hex = str(reg.val()['pn-token'])
-            if token_hex != 'Empty' and token_hex:
-                payload = Payload(alert='Register', sound='Default', badge=1)
-                try:
-                    apns.gateway_server.send_notification(token_hex, payload)
-                except Exception as e:
-                    logging.warning("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
-                    logging.error(traceback.format_exc())
-                    server.shutdown()
-                    server.server_close()
-                    sys.exit(1)
-    t = threading.Timer(30.0, sendPushNotificationFR)
-    t.start()
-
-timer = threading.Timer(30.0, sendPushNotificationFR)
+# def sendPushNotificationFR():
+#     registrees = db.child('voip-registrar').get()
+#     if registrees.val():
+#         for reg in registrees.each():
+#             token_hex = str(reg.val()['pn-token'])
+#             if token_hex != 'Empty' and token_hex:
+#                 payload = Payload(alert='Register', sound='Default', badge=1)
+#                 try:
+#                     apns.gateway_server.send_notification(token_hex, payload)
+#                 except Exception as e:
+#                     logging.warning("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
+#                     logging.error(traceback.format_exc())
+#                     server.shutdown()
+#                     server.server_close()
+#                     sys.exit(1)
+#     t = threading.Timer(30.0, sendPushNotificationFR)
+#     t.start()
+#
+# timer = threading.Timer(30.0, sendPushNotificationFR)
 
 class UDPHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
-        data = self.request[0]
+        data = str(self.request[0], 'utf-8')
         self.data = data.split('\r\n')
         self.socket = self.request[1]
         request_uri = self.data[0]
@@ -157,6 +158,9 @@ class UDPHandler(socketserver.BaseRequestHandler):
             server.shutdown()
             server.server_close()
             sys.exit(1)
+
+    def adapt_datetime(ts):
+        return time.mktime(ts.timetuple())
 
     def remove_route_header(self):
         # delete Route
@@ -214,19 +218,22 @@ class UDPHandler(socketserver.BaseRequestHandler):
             return False
 
     def check_validity(self, uri):
-        contact = self.db_cursor.execute("SELECT * FROM registrar WHERE name=?", uri).fetchone()
-        if contact:
+        timestamp = self.db_cursor.execute("SELECT validity FROM registrar WHERE uri=?", (uri,)).fetchone()
+        if timestamp:
             now = int(time.time())
-            if contact[4] > now:
+            if timestamp[0] > now:
                 return True
             else:
-                self.db_cursor.execute("DELETE FROM registrar WHERE uri=?", uri)
+                self.db_cursor.execute("DELETE FROM registrar WHERE uri=?", (uri,))
                 logging.info("registration for %s has expired" % uri)
                 return False
 
     def get_socket_info(self, uri):
-        user = self.db_cursor.execute("SELECT * FROM register WHERE uri=?", uri)
-        return user[1], user[2], user[3] 
+        user = self.db_cursor.execute("SELECT * FROM register WHERE uri=?", (uri,)).fetchone()
+        if user:
+            return user[1], user[2], user[3]
+        else:
+            self.send_response("404 Not Found")
 
     def get_destination(self):
         destination = ""
@@ -274,8 +281,8 @@ class UDPHandler(socketserver.BaseRequestHandler):
             if line == "":
                 break
         data.append("")
-        text = string.join(data, '\r\n')
-        self.socket.sendto(text, self.client_address)
+        text = '\r\n'.join(data)
+        self.socket.sendto(bytes(text, 'utf-8'), self.client_address)
 
     def process_register(self):
         fromm = ""
@@ -301,9 +308,8 @@ class UDPHandler(socketserver.BaseRequestHandler):
                     if rx_token.search(line):
                         token = rx_token.search(line).group(1)
                     else:
-                        token = "No"
-                        logging.warning("Someone tried registering without push notification token from %s:%s" % (self.client_address[0], self.client_address[1]))
-                        return
+                        token = ''
+                        # logging.warning("Someone tried registering without push notification token from %s:%s" % (self.client_address[0], self.client_address[1]))
                 else:
                     md = rx_addr.search(line)
                     if md:
@@ -319,30 +325,35 @@ class UDPHandler(socketserver.BaseRequestHandler):
         elif len(header_expires) > 0:
             expires = int(header_expires)
         already_registered = False
-        data = (fromm, self.client_address[0], self.client_address[1], token, validity)
-        self.sip_user.set_user_info(data)
 
-        if not self.db_cursor.execute('''SELECT name FROM sqlite_master WHERE type='table' AND name="registrar"'''):
-            self.db_cursor.execute('''CREATE TABLE registrar (uri text, host text, port integer, token text, validity date)''').execute('''CREATE TABLE registrar (uri text, host text, port integer, token text, validity date)''')
+        self.db_cursor.execute('''CREATE TABLE IF NOT EXISTS registrar (uri text, host text, port integer, token text, validity int)''')
+
         for contact in self.db_cursor.execute('''SELECT * FROM registrar''').fetchall():
-            if self.sip_user.user_uri in contact:
+            if fromm in contact:
                 already_registered = True
                 break
 
         if not already_registered and expires > 0:
-            self.db_cursor.execute("INSERT INTO registrar VALUES (?, ?, ?, ?, ?)", self.sip_user.get_user_info)
+            now = time.time()
+            validity = now + expires
+            data = (fromm, self.client_address[0], self.client_address[1], token, validity)
+
+            self.sip_user.set_user_info(data)
+            print(self.sip_user.get_user_info())
+            self.db_cursor.execute("INSERT INTO registrar VALUES (?, ?, ?, ?, ?)", self.sip_user.get_user_info())
         elif already_registered and expires == 0:
-            self.db_cursor.execute("DELETE FROM registrar WHERE uri=?", self.sip_user.user_uri)
+            self.db_cursor.execute("DELETE FROM registrar WHERE uri=?", (fromm,))
             self.send_response("200 OK")
         else:
-            valid = self.check_validity(self.sip_user.user_uri)
+            valid = self.check_validity(fromm)
             if not valid:
                 self.send_response('401 Unauthorized')
 
-        request = string.join(self.data, "\r\n")
+        request = '\r\n'.join(self.data)
         showtime()
         logging.info("<<< %s" % self.data[0])
         logging.info("---\n<< USER REGISTERED [%d]:\n%s\n---" % (len(request), request))
+        self.db_connection.commit()
         self.send_response("200 OK")
 
     def process_invite(self):
@@ -351,14 +362,14 @@ class UDPHandler(socketserver.BaseRequestHandler):
         if len(origin) == 0 or len(destination) == 0:
             self.send_response("400 Bad Request")
             return
-        if destination in self.db_cursor.execute("SELECT * FROM register WHERE uri=?", destination):
+        if destination in self.db_cursor.execute("SELECT * FROM register WHERE uri=?", (destination,)):
             client_ip, client_port, token = self.get_socket_info(destination)
             client_address = (client_ip, client_port)
             if token is not None:
                 self.send_push_notification(token, origin)
                 showtime()
                 logging.info("Invite Push Notification sent to pn-token: %s" % token)
-            request = string.join(self.data, '\r\n')
+            request = '\r\n'.join(self.data)
             self.socket.sendto(request, client_address)
             showtime()
             logging.info("<<< %s" % self.data[0])
@@ -368,7 +379,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
             data = self.remove_route_header()
             #insert Record-Route
             data.insert(1, recordRoute)
-            request = string.join(data, '\r\n')
+            request = '\r\n'.join(data)
             self.socket.sendto(request, reg_addr)
             showtime()
             logging.info(">>> %s" % self.data[0])
@@ -380,7 +391,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
             if self.client_address == reg_addr:
                 client_ip, client_port, token = self.get_socket_info(destination)
                 client_address = (client_ip, client_port)
-                request = string.join(self.data, '\r\n')
+                request = '\r\n'.join(self.data)
                 self.socket.sendto(request, client_address)
                 showtime()
                 logging.info("<<< %s" % self.data[0])
@@ -406,7 +417,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
             if self.client_address == reg_addr:
                 client_ip, client_port, token = self.get_socket_info(destination)
                 client_address = (client_ip, client_port)
-                request = string.join(self.data, '\r\n')
+                request = '\r\n'.join(self.data)
                 self.socket.sendto(request, client_address)
                 showtime()
                 logging.info("<<< %s" % self.data[0])
@@ -415,7 +426,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
                 data = self.remove_route_header()
                 #insert Record-Route
                 data.insert(1, recordRoute)
-                request = string.join(data, '\r\n')
+                request = '\r\n'.join(data)
                 self.socket.sendto(request, reg_addr)
                 showtime()
                 logging.info(">>> %s" % self.data[0])
@@ -432,7 +443,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
             destination = self.get_destination()
             client_ip, client_port, token = self.get_socket_info(destination)
             client_address = (client_ip, client_port)
-            request = string.join(self.data, '\r\n')
+            request = '\r\n'.join(self.data)
             self.socket.sendto(request, client_address)
             showtime()
             logging.info("<<< %s" % self.data[0])
@@ -440,7 +451,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
         else:
             data = self.remove_route_header()
             data.insert(1, recordRoute)
-            request = string.join(data, '\r\n')
+            request = '\r\n'.join(data)
             self.socket.sendto(request, reg_addr)
             showtime()
             logging.info(">>> %s" % self.data[0])
@@ -452,14 +463,14 @@ class UDPHandler(socketserver.BaseRequestHandler):
             self.data.insert(1, recordRoute)
             client_ip, client_port, token = self.get_socket_info(destination)
             client_address = (client_ip, client_port)
-            request = string.join(self.data, '\r\n')
+            request = '\r\n'.join(self.data)
             self.socket.sendto(request, client_address)
             showtime()
             logging.info("<<< %s" % self.data[0])
             logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
         else:
             self.data.insert(1, recordRoute)
-            request = string.join(self.data, '\r\n')
+            request = '\r\n'.join(self.data)
             self.socket.sendto(request, reg_addr)
             showtime()
             logging.info(">>> %s" % self.data[0])
@@ -469,6 +480,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
         if len(self.data) > 0:
             request_uri = self.data[0]
             logging.info("Received: " + request_uri + " From: " + self.client_address[0] + ":" + str(self.client_address[1]))
+            print("Received: " + request_uri + " From: " + self.client_address[0] + ":" + str(self.client_address[1]))
             if rx_register.search(request_uri):
                 self.process_register()
             elif rx_invite.search(request_uri):
@@ -512,9 +524,11 @@ if __name__ == "__main__":
     topVia = "Via: SIP/2.0/UDP %s:%d" % (public_ip, PORT)
     server = socketserver.UDPServer((HOST, PORT), UDPHandler)
     logging.info("Server is running on public ip -> " + public_ip + ":" + str(PORT))
+    print("Server is running on public ip -> " + public_ip + ":" + str(PORT))
     logging.info("Server is running on private ip -> " + ip_address + ":" + str(PORT))
+    print("Server is running on private ip -> " + ip_address + ":" + str(PORT))
     try:
-        timer.start()
+        # timer.start()
         server.serve_forever()
     except Exception as e:
         logging.error("system exit with error see logs for details")
