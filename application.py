@@ -515,7 +515,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', filename='/var/log/Mercurio_Proxy.log', level=logging.INFO, datefmt='%H:%M:%S')
+    logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', filename='/var/log/SIP_Server.log', level=logging.INFO, datefmt='%H:%M:%S')
     logging.info(time.strftime("%a, %d %b %Y %H:%M:%S ", time.localtime()))
     hostname = socket.gethostname()
     ip_address = socket.gethostbyname(hostname)
