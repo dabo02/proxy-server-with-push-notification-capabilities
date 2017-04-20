@@ -25,7 +25,7 @@ import sys
 import traceback
 import time
 import logging
-# from apns import APNs, Frame, Payload
+from pushjack import APNSClient
 import sqlite3
 import os
 from sip_user import SipUser
@@ -56,13 +56,8 @@ rx_contact = re.compile("^Contact:")
 rx_cContact = re.compile("^m:")
 rx_uri = re.compile("sip:([^@]*)@([^;>$]*)")
 rx_addr = re.compile("sip:([^ ;>$]*)")
-#rx_addrport = re.compile("([^:]*):(.*)")
 rx_code = re.compile("^SIP/2.0 ([^ ]*)")
-# rx_invalid = re.compile("^192\.168")
-# rx_invalid2 = re.compile("^10\.")
-#rx_cseq = re.compile("^CSeq:")
-#rx_callid = re.compile("Call-ID: (.*)$")
-#rx_rr = re.compile("^Record-Route:")
+rx_rr = re.compile("^Record-Route:")
 rx_request_uri = re.compile("^([^ ]*) sip:([^ ]*) SIP/2.0")
 rx_route = re.compile("^Route:")
 rx_contentLength = re.compile("^Content-Length:")
@@ -79,16 +74,16 @@ rx_expires = re.compile("^Expires: (.*)$")
 # global dictionary
 development = True
 public_ip = ipgetter.myip()
-# apns = APNs(use_sandbox=True, cert_file=os.environ.get('PATH_TO_PN_CERT'))
-#reg_addr = (os.environ.get('SIP_REGISTRAR_IP') or None, os.environ.get('SIP_REGISTRAR_PORT') or None)
+apns = APNSClient(certificate=os.environ.get('PATH_TO_PN_CERT'),
+                  default_error_timeout=10,
+                  default_expiration_offset=2592000,
+                  default_batch_size=100)
 recordRoute = ""
 topVia = ""
 registrar = {}
 push_notification = {}
-blacklisted_user_agents = ['sipcli', 'sipvicious', 'sip-scan', 'sipsak', 'sundayddr',
-                           'friendly-scanner', 'iWar', 'CSipSimple', 'SIVuS', 'Gulp',
-                           'sipv', 'smap', 'friendly-request', 'VaxIPUserAgent', 'VaxSIPUserAgent',
-                           'siparmyknife', 'Test Agent']
+db = sqlite3.connect("sip_registrar")
+cursor = db.cursor()
 
 def hexdump(chars, sep, width):
     while chars:
@@ -103,25 +98,29 @@ def quotechars(chars):
 def showtime():
     logging.info(time.strftime("(%H:%M:%S)", time.localtime()))
 
-# def sendPushNotificationFR():
-#     registrees = db.child('voip-registrar').get()
-#     if registrees.val():
-#         for reg in registrees.each():
-#             token_hex = str(reg.val()['pn-token'])
-#             if token_hex != 'Empty' and token_hex:
-#                 payload = Payload(alert='Register', sound='Default', badge=1)
-#                 try:
-#                     apns.gateway_server.send_notification(token_hex, payload)
-#                 except Exception as e:
-#                     logging.warning("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
-#                     logging.error(traceback.format_exc())
-#                     server.shutdown()
-#                     server.server_close()
-#                     sys.exit(1)
-#     t = threading.Timer(30.0, sendPushNotificationFR)
-#     t.start()
-#
-# timer = threading.Timer(30.0, sendPushNotificationFR)
+def sendPushNotificationFR():
+
+    for user in cursor.execute("SELECT * FROM registrar"):
+        token_hex = str(user[3])
+        if token_hex:
+            try:
+                res = apns.send(token_hex,
+                                  'Register',
+                                  badge=1,
+                                  sound='Default',
+                                  content_available=True,
+                                  title='SIP Server Notification')
+            except res.errors as e:
+                # logging.warning("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
+                logging.error(traceback.format_exc())
+                server.shutdown()
+                server.server_close()
+                sys.exit(1)
+
+    t = threading.Timer(30.0, sendPushNotificationFR)
+    return t.start()
+
+timer = threading.Timer(30.0, sendPushNotificationFR)
 
 class UDPHandler(socketserver.BaseRequestHandler):
 
@@ -130,6 +129,10 @@ class UDPHandler(socketserver.BaseRequestHandler):
         self.data = data.split('\r\n')
         self.socket = self.request[1]
         request_uri = self.data[0]
+        self.blacklisted_user_agents = ['sipcli', 'sipvicious', 'sip-scan', 'sipsak', 'sundayddr',
+                                        'friendly-scanner', 'iWar', 'CSipSimple', 'SIVuS', 'Gulp',
+                                        'sipv', 'smap', 'friendly-request', 'VaxIPUserAgent', 'VaxSIPUserAgent',
+                                        'siparmyknife', 'Test Agent']
         self.sip_user = SipUser()
         self.db_connection = sqlite3.connect('sip_registrar.db')
         self.db_cursor = self.db_connection.cursor()
@@ -148,18 +151,19 @@ class UDPHandler(socketserver.BaseRequestHandler):
                 logging.warning("---")
 
     def send_push_notification(self, token, caller):
-        payload = Payload(alert=('You have an incoming call from %s' % caller), sound='Default', badge=1)
         try:
-            apns.gateway_server.send_notification(token, payload)
-        except Exception as err:
-            logging.warning("Error happened sending request to apns service: %s -------- %s" %(err.__doc__, err.message))
+            res = apns.send(token,
+                            'You have an incoming call from %s' % caller,
+                            badge=1,
+                            sound='Default',
+                            content_available=True,
+                            title='SIP Server Notification')
+        except res.errors as e:
+            # logging.warning("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
             logging.error(traceback.format_exc())
             server.shutdown()
             server.server_close()
             sys.exit(1)
-
-    def adapt_datetime(ts):
-        return time.mktime(ts.timetuple())
 
     def remove_route_header(self):
         # delete Route
@@ -202,16 +206,20 @@ class UDPHandler(socketserver.BaseRequestHandler):
         return data
 
     def security_check(self):
-        for line in self.data:
+        for index, line in enumerate(self.data):
             if rx_user_agent.search(line):
                 ua = rx_user_agent.search(line).group(1)
-                if ua in blacklisted_user_agents:
+                if ua in self.blacklisted_user_agents:
                     self.send_response("495 Further Requests Will Be Tracerouted")
                     logging.warning("Malicious user agent %s found server response sent" % ua)
-                    return False
+                    valid = False
+                    break
                 else:
-                    return True
-        if self.client_address == reg_addr:
+                    valid = True
+                    break
+            elif index == len(self.data)-1:
+                valid = False
+        if valid:
             return True
         else:
             return False
@@ -228,7 +236,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
                 return False
 
     def get_socket_info(self, uri):
-        user = self.db_cursor.execute("SELECT * FROM register WHERE uri=?", (uri,)).fetchone()
+        user = self.db_cursor.execute("SELECT * FROM registrar WHERE uri=?", (uri,)).fetchone()
         if user:
             return user[1], user[2], user[3]
         else:
@@ -256,7 +264,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
 
     def send_response(self, code):
         request_uri = "SIP/2.0 " + code
-        self.data[0]= request_uri
+        self.data[0] = request_uri
         index = 0
         data = []
         for line in self.data:
@@ -361,119 +369,93 @@ class UDPHandler(socketserver.BaseRequestHandler):
         if len(origin) == 0 or len(destination) == 0:
             self.send_response("400 Bad Request")
             return
-        if destination in self.db_cursor.execute("SELECT * FROM register WHERE uri=?", (destination,)):
+        if self.db_cursor.execute("SELECT * FROM registrar WHERE uri=?", (destination,)).fetchone():
             client_ip, client_port, token = self.get_socket_info(destination)
             client_address = (client_ip, client_port)
             if token is not None:
                 self.send_push_notification(token, origin)
                 showtime()
                 logging.info("Invite Push Notification sent to pn-token: %s" % token)
-            request = '\r\n'.join(self.data)
-            self.socket.sendto(request, client_address)
-            showtime()
-            logging.info("<<< %s" % self.data[0])
-            logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
-
-        else:
             data = self.remove_route_header()
-            #insert Record-Route
             data.insert(1, recordRoute)
             request = '\r\n'.join(data)
-            self.socket.sendto(request, reg_addr)
+            self.socket.sendto(bytes(request, 'utf-8'), client_address)
             showtime()
             logging.info(">>> %s" % self.data[0])
-            logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
+            logging.info("---\n>>> client sent [%d]:\n%s\n---" % (len(request), request))
+
+        else:
+            self.send_response("404 Not Found")
+            request = '\r\n'.join(self.data)
+            showtime()
+            logging.info("<<< %s" % self.data[0])
+            logging.info("---\n<< client failed with 404 [%d]:\n%s\n---" % (len(request), request))
 
     def process_ack(self):
         destination = self.get_destination()
         if len(destination) > 0:
-            if self.client_address == reg_addr:
+            if self.db_cursor.execute("SELECT uri FROM registrar WHERE uri=?", (destination,)).fetchone():
                 client_ip, client_port, token = self.get_socket_info(destination)
                 client_address = (client_ip, client_port)
-                request = '\r\n'.join(self.data)
-                self.socket.sendto(request, client_address)
-                showtime()
-                logging.info("<<< %s" % self.data[0])
-                logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
-            else:
                 data = self.remove_route_header()
-                #insert Record-Route
                 data.insert(1, recordRoute)
-                request = string.join(data,'\r\n')
-                self.socket.sendto(request, reg_addr)
+                request = '\r\n'.join(data)
+                self.socket.sendto(request, client_address)
                 showtime()
                 logging.info(">>> %s" % self.data[0])
                 logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
+            else:
+                self.send_response("404 Not Found")
+                request = '\r\n'.join(self.data)
+                showtime()
+                logging.info("<<< %s" % self.data[0])
+                logging.info("---\n<< client failed with 404 [%d]:\n%s\n---" % (len(request), request))
+
 
     def process_non_invite(self):
         origin = self.get_origin()
-        if len(origin) == 0:
-            self.send_response("400 Bad Request")
-            logging.info()
-            return
         destination = self.get_destination()
+        if len(origin) == 0 or len(destination) == 0:
+            self.send_response("400 Bad Request")
+            logging.warning("---------------------------------------------------------")
+            logging.warning('''Server Sent Error to client because destination or origin in 
+                            request is ambiguous: origin-%s''' % origin)
+            logging.warning('''Server Sent Error to client because destination or origin in 
+                            request is ambiguous: destination-%s ''' % destination)
+            logging.warning("---------------------------------------------------------")
+            return
         if len(destination) > 0:
-            if self.client_address == reg_addr:
+            if self.db_cursor.execute("SELECT uri FROM registrar WHERE uri=?", (destination,)).fetchone():
                 client_ip, client_port, token = self.get_socket_info(destination)
                 client_address = (client_ip, client_port)
-                request = '\r\n'.join(self.data)
-                self.socket.sendto(request, client_address)
-                showtime()
-                logging.info("<<< %s" % self.data[0])
-                logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
-            else:
                 data = self.remove_route_header()
-                #insert Record-Route
                 data.insert(1, recordRoute)
                 request = '\r\n'.join(data)
-                self.socket.sendto(request, reg_addr)
+                self.socket.sendto(request, client_address)
                 showtime()
                 logging.info(">>> %s" % self.data[0])
                 logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
-
-        else:
-            self.send_response("500 Server Internal Error")
-            logging.warning("---------------------------------------------------------")
-            logging.warning("Server Sent Error to client because destination in uri is ambiguous: %s" % destination)
-            logging.warning("---------------------------------------------------------")
-
-    def process_bye(self):
-        if self.client_address == reg_addr:
-            destination = self.get_destination()
-            client_ip, client_port, token = self.get_socket_info(destination)
-            client_address = (client_ip, client_port)
-            request = '\r\n'.join(self.data)
-            self.socket.sendto(request, client_address)
-            showtime()
-            logging.info("<<< %s" % self.data[0])
-            logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
-        else:
-            data = self.remove_route_header()
-            data.insert(1, recordRoute)
-            request = '\r\n'.join(data)
-            self.socket.sendto(request, reg_addr)
-            showtime()
-            logging.info(">>> %s" % self.data[0])
-            logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
+            else:
+                self.send_response("404 Not Found")
+                request = '\r\n'.join(self.data)
+                showtime()
+                logging.info("<<< %s" % self.data[0])
+                logging.info("---\n<< client failed with 404 [%d]:\n%s\n---" % (len(request), request))
 
     def process_code(self):
-        if self.client_address == reg_addr:
-            destination = self.get_origin()
-            self.data.insert(1, recordRoute)
-            client_ip, client_port, token = self.get_socket_info(destination)
-            client_address = (client_ip, client_port)
-            request = '\r\n'.join(self.data)
-            self.socket.sendto(request, client_address)
-            showtime()
-            logging.info("<<< %s" % self.data[0])
-            logging.info("---\n<< server sent [%d]:\n%s\n---" % (len(request), request))
-        else:
-            self.data.insert(1, recordRoute)
-            request = '\r\n'.join(self.data)
-            self.socket.sendto(request, reg_addr)
-            showtime()
-            logging.info(">>> %s" % self.data[0])
-            logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
+        origin = self.get_origin()
+        if len(origin) > 0:
+            logging.debug("origin %s" % origin)
+            if self.db_cursor.execute("SELECT uri FROM registrar WHERE uri=?" (origin,)).fetchone():
+                client_ip, client_port, token = self.getSocketInfo(origin)
+                self.data = self.removeRouteHeader()
+                data = self.removeTopVia()
+                text = '\r\n'.join(data)
+                claddr = (client_ip, client_port)
+                self.socket.sendto(bytes(text, 'utf-8'), claddr)
+                showtime()
+                logging.info("<<< %s" % data[0])
+                logging.info("---\n<< server send [%d]:\n%s\n---" % (len(text), text))
 
     def process_request(self):
         if len(self.data) > 0:
