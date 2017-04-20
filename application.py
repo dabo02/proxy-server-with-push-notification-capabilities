@@ -14,8 +14,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-" Code On!! (Rock On!! in modern times) and please, share and enjoy... 
-Code yourself out life is short..." Me :)
+"Code yourself out life is short..." Me :)  and please, share and enjoy... 
 '''
 
 import socketserver
