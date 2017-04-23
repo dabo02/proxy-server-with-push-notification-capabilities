@@ -127,6 +127,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
     def handle(self):
         data = str(self.request[0], 'utf-8')
         self.data = data.split('\r\n')
+        self.expires =True
         self.socket = self.request[1]
         request_uri = self.data[0]
         self.blacklisted_user_agents = ['sipcli', 'sipvicious', 'sip-scan', 'sipsak', 'sundayddr',
@@ -158,7 +159,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
                             sound='Default',
                             content_available=True,
                             title='SIP Server Notification')
-        except res.errors as e:
+        except Exception as e:
             # logging.warning("Error happened sending request to apns service: %s -------- %s" %(e.__doc__, e.message))
             logging.error(traceback.format_exc())
             server.shutdown()
@@ -286,6 +287,8 @@ class UDPHandler(socketserver.BaseRequestHandler):
                 data[index]="l: 0"
             index += 1
             if line == "":
+                if not self.expires:
+                    data[index-1] = "Expires: 3600"
                 break
         data.append("")
         text = '\r\n'.join(data)
@@ -331,12 +334,14 @@ class UDPHandler(socketserver.BaseRequestHandler):
             expires = int(contact_expires)
         elif len(header_expires) > 0:
             expires = int(header_expires)
+        else:
+            self.expires = False
+            token = ''
+
         already_registered = False
-
         self.db_cursor.execute('''CREATE TABLE IF NOT EXISTS registrar (uri text, host text, port integer, token text, validity int)''')
-
         for contact in self.db_cursor.execute('''SELECT * FROM registrar''').fetchall():
-            if fromm in contact:
+            if fromm == contact[0] and self.client_address[0] == contact[1] and self.client_address[1] == contact[2]:
                 already_registered = True
                 break
 
@@ -344,17 +349,22 @@ class UDPHandler(socketserver.BaseRequestHandler):
             now = time.time()
             validity = now + expires
             data = (fromm, self.client_address[0], self.client_address[1], token, validity)
-
             self.sip_user.set_user_info(data)
-            print(self.sip_user.get_user_info())
             self.db_cursor.execute("INSERT INTO registrar VALUES (?, ?, ?, ?, ?)", self.sip_user.get_user_info())
-        elif already_registered and expires == 0:
+        elif already_registered and expires == 0 and self.expires:
             self.db_cursor.execute("DELETE FROM registrar WHERE uri=?", (fromm,))
+            self.db_connection.commit()
             self.send_response("200 OK")
-        else:
-            valid = self.check_validity(fromm)
-            if not valid:
-                self.send_response('401 Unauthorized')
+            return
+        elif not self.expires and not already_registered:
+            now = time.time()
+            validity = now + 3600
+            data = (fromm, self.client_address[0], self.client_address[1], token, validity)
+            self.sip_user.set_user_info(data)
+            self.db_cursor.execute("INSERT INTO registrar VALUES (?, ?, ?, ?, ?)", self.sip_user.get_user_info())
+            self.db_connection.commit()
+            self.send_response("200 OK")
+            return
 
         request = '\r\n'.join(self.data)
         showtime()
@@ -372,13 +382,14 @@ class UDPHandler(socketserver.BaseRequestHandler):
         if self.db_cursor.execute("SELECT * FROM registrar WHERE uri=?", (destination,)).fetchone():
             client_ip, client_port, token = self.get_socket_info(destination)
             client_address = (client_ip, client_port)
-            if token is not None:
+            if token is not '':
                 self.send_push_notification(token, origin)
                 showtime()
                 logging.info("Invite Push Notification sent to pn-token: %s" % token)
             data = self.remove_route_header()
             data.insert(1, recordRoute)
             request = '\r\n'.join(data)
+            self.send_response("100 Trying")
             self.socket.sendto(bytes(request, 'utf-8'), client_address)
             showtime()
             logging.info(">>> %s" % self.data[0])
@@ -400,7 +411,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
                 data = self.remove_route_header()
                 data.insert(1, recordRoute)
                 request = '\r\n'.join(data)
-                self.socket.sendto(request, client_address)
+                self.socket.sendto(bytes(request, 'utf-8'), client_address)
                 showtime()
                 logging.info(">>> %s" % self.data[0])
                 logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
@@ -431,7 +442,7 @@ class UDPHandler(socketserver.BaseRequestHandler):
                 data = self.remove_route_header()
                 data.insert(1, recordRoute)
                 request = '\r\n'.join(data)
-                self.socket.sendto(request, client_address)
+                self.socket.sendto(bytes(request, 'utf-8'), client_address)
                 showtime()
                 logging.info(">>> %s" % self.data[0])
                 logging.info("---\n>> client sent [%d]:\n%s\n---" % (len(request), request))
@@ -446,10 +457,10 @@ class UDPHandler(socketserver.BaseRequestHandler):
         origin = self.get_origin()
         if len(origin) > 0:
             logging.debug("origin %s" % origin)
-            if self.db_cursor.execute("SELECT uri FROM registrar WHERE uri=?" (origin,)).fetchone():
-                client_ip, client_port, token = self.getSocketInfo(origin)
-                self.data = self.removeRouteHeader()
-                data = self.removeTopVia()
+            if self.db_cursor.execute("SELECT * FROM registrar WHERE uri=?", (origin,)).fetchone():
+                client_ip, client_port, token = self.get_socket_info(origin)
+                self.data = self.remove_route_header()
+                data = self.remove_top_via()
                 text = '\r\n'.join(data)
                 claddr = (client_ip, client_port)
                 self.socket.sendto(bytes(text, 'utf-8'), claddr)
